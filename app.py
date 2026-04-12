@@ -46,7 +46,7 @@ if 'last_price_update' not in st.session_state:
     st.session_state.last_price_update = None
 
 # Title and description
-st.title("📈 Monte Carlo Option Pricer")
+st.title(" Monte Carlo Option Pricer")
 st.markdown("""
 **High-Performance Option Pricing with Real-Time Market Data**
 
@@ -101,7 +101,7 @@ num_steps = st.sidebar.slider("Time Steps", min_value=10, max_value=500, value=1
 
 # Main content area with tabs
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "💰 Pricing", "📊 Price Paths", "🎯 Greeks", "⚡ Performance", "🌊 Data Stream"
+    " Pricing", "Price Paths", " Greeks", "⚡ Performance", "🌊 Data Stream"
 ])
 
 # Tab 1: Option Pricing
