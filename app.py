@@ -4,6 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
+import re
 import time
 from datetime import datetime
 
@@ -37,6 +38,19 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+MAX_LSM_CELLS = 20_000_000  # sims x (steps+1) cap for American pricing (~160 MB per matrix)
+TICKER_PATTERN = re.compile(r"^[A-Z0-9.\-^=]{1,15}$")
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_market_data(ticker: str) -> dict:
+    """Cached Yahoo lookup: shared hosts get rate-limited if every rerun hits the API."""
+    data = MarketDataFeed().get_stock_data(ticker)
+    if 'error' in data:
+        raise RuntimeError(data['error'])  # exceptions are never cached
+    return data
+
+
 # Initialize session state
 if 'mc_engine' not in st.session_state:
     st.session_state.mc_engine = MonteCarloEngine()
@@ -61,18 +75,20 @@ st.sidebar.header("Option Parameters")
 use_live_data = st.sidebar.checkbox("Use Live Market Data", value=False)
 
 if use_live_data:
-    ticker = st.sidebar.text_input("Stock Ticker", value="AAPL").upper()
+    ticker = st.sidebar.text_input("Stock Ticker", value="AAPL", max_chars=15).strip().upper()
+    ticker_ok = bool(TICKER_PATTERN.match(ticker))
+    if not ticker_ok:
+        st.sidebar.warning("Enter a valid ticker symbol (letters, digits, . - ^ =).")
     
-    if st.sidebar.button("Fetch Market Data"):
+    if st.sidebar.button("Fetch Market Data", disabled=not ticker_ok):
         with st.spinner("Fetching market data..."):
-            market_data = st.session_state.market_feed.get_stock_data(ticker)
-            if 'error' in market_data:
-                st.session_state.pop('market_data', None)
-                st.session_state.market_error = f"Could not fetch '{ticker}': {market_data['error']}"
-            else:
+            try:
+                st.session_state.market_data = fetch_market_data(ticker)
                 st.session_state.pop('market_error', None)
-                st.session_state.market_data = market_data
                 st.session_state.last_price_update = datetime.now()
+            except RuntimeError as e:
+                st.session_state.pop('market_data', None)
+                st.session_state.market_error = f"Could not fetch '{ticker}': {e}"
     
     if 'market_error' in st.session_state:
         st.sidebar.error(st.session_state.market_error + " Enter values manually.")
@@ -100,17 +116,19 @@ option_style = st.sidebar.selectbox("Option Style", ["European", "American"])
 st.sidebar.markdown("---")
 st.sidebar.header("Simulation Parameters")
 
-# American (LSM) keeps the full path matrix in memory, so it is capped lower
+num_steps = st.sidebar.slider("Time Steps", min_value=10, max_value=500, value=100, step=10)
+
+# American (LSM) keeps the full path matrix in memory, so total size is capped
 sim_options = [1000, 5000, 10000, 50000, 100000, 500000, 1000000]
 if option_style == "American":
-    sim_options = [n for n in sim_options if n <= 200000]
+    sim_options = [n for n in sim_options if n * (num_steps + 1) <= MAX_LSM_CELLS and n <= 200000]
+    st.sidebar.caption("American options: simulations are limited by simulations × time steps to keep memory low.")
 num_simulations = st.sidebar.select_slider(
     "Number of Simulations",
     options=sim_options,
-    value=100000
+    value=100000 if 100000 in sim_options else sim_options[-1]
 )
 
-num_steps = st.sidebar.slider("Time Steps", min_value=10, max_value=500, value=100, step=10)
 
 params = (S0, K, T, r, sigma, option_type, option_style, num_simulations, num_steps)
 
@@ -542,6 +560,8 @@ with tab4:
             benchmark_results = []
             
             sim_counts = [1000, 5000, 10000, 50000, 100000]
+            if option_style == "American":
+                sim_counts = [n for n in sim_counts if n * (num_steps + 1) <= MAX_LSM_CELLS]
             
             for sim_count in sim_counts:
                 start_time = time.time()
@@ -645,14 +665,14 @@ with tab5:
     col1, col2 = st.columns([1, 2])
     
     with col1:
-        stream_ticker = st.text_input("Ticker for Stream", value="AAPL")
+        stream_ticker = st.text_input("Ticker for Stream", value="AAPL", max_chars=15).strip().upper()
         num_messages = st.slider("Number of Messages", min_value=100, max_value=10000, value=1000, step=100)
         
-        if st.button("Simulate Data Stream", width='stretch'):
+        if st.button("Simulate Data Stream", width='stretch', disabled=not TICKER_PATTERN.match(stream_ticker)):
             with st.spinner("Generating simulated stream..."):
                 t0 = time.perf_counter()
                 stream_data = st.session_state.market_feed.simulate_kafka_stream(
-                    stream_ticker.upper(), num_messages
+                    stream_ticker, num_messages
                 )
                 gen_time = time.perf_counter() - t0
                 st.session_state.stream_data = stream_data

@@ -25,7 +25,9 @@ monte_carlo_option_pricer/
 ├── monte_carlo.py      # Monte Carlo engine (European + American LSM pricing)
 ├── greeks.py           # Black-Scholes Greeks calculator + implied volatility
 ├── market_data.py      # Yahoo Finance data feed + Kafka stream simulator
-├── tests/              # pytest suite
+├── tests/              # pytest suite (pricing accuracy, market data, UI)
+├── Dockerfile          # container build for non-Streamlit-Cloud hosts
+├── requirements.txt    # dependencies for deployment
 └── pyproject.toml      # Project dependencies
 ```
 
@@ -113,6 +115,28 @@ Analytical closed-form solutions for all five Greeks, plus **Newton-Raphson impl
 ## Performance
 
 Throughput depends on hardware. Use the **Performance** tab to measure it on your machine. European pricing is fully vectorized and typically reaches millions of simulations per second; American (LSM) pricing is slower because it runs a regression at every time step.
+
+---
+
+## Deployment
+
+### Streamlit Community Cloud (free)
+1. Push this repo to GitHub.
+2. Go to [share.streamlit.io](https://share.streamlit.io) → **Create app** → pick the repo and branch.
+3. Set **Main file path** to `app.py`. Under **Advanced settings** choose **Python 3.12**.
+4. Deploy. Dependencies are installed from `requirements.txt`.
+
+### Docker (Render, Fly.io, Cloud Run, etc.)
+```bash
+docker build -t mc-option-pricer .
+docker run -p 8501:8501 mc-option-pricer      # then open http://localhost:8501
+```
+The container listens on `$PORT` (default 8501), so platforms that inject a port work unchanged.
+
+### Notes for hosted use
+- **Memory:** American pricing keeps all paths in memory, so the UI limits `simulations × time steps` to 20M (about 160 MB for the path matrix).
+- **Yahoo Finance rate limits:** shared cloud IPs are sometimes throttled. Lookups are cached for 5 minutes, and a failed fetch shows an error and lets you enter values manually. The rest of the app works offline.
+- **CI:** `.github/workflows/ci.yml` runs the test suite and a UI smoke test on every push.
 
 ---
 

@@ -59,16 +59,23 @@ class MonteCarloEngine:
         
         dt = T / num_steps
         
-        # Generate all random numbers at once for better performance
-        Z = self.rng.standard_normal((num_simulations, num_steps))
-
-        # Paths are S0 * exp(cumulative log-returns), fully vectorized
-        log_returns = (r - 0.5 * sigma**2) * dt + sigma * np.sqrt(dt) * Z
+        # Build paths in one (num_simulations x num_steps+1) matrix, filling it
+        # in row blocks so only a small temporary is alive besides the result.
         price_paths = np.empty((num_simulations, num_steps + 1))
         price_paths[:, 0] = S0
-        np.cumsum(log_returns, axis=1, out=price_paths[:, 1:])
-        price_paths[:, 1:] = S0 * np.exp(price_paths[:, 1:])
-
+        drift = (r - 0.5 * sigma**2) * dt
+        diffusion = sigma * np.sqrt(dt)
+        block = max(1, 2_000_000 // num_steps)
+        for lo in range(0, num_simulations, block):
+            hi = min(lo + block, num_simulations)
+            z = self.rng.standard_normal((hi - lo, num_steps))
+            z *= diffusion
+            z += drift
+            np.cumsum(z, axis=1, out=z)
+            np.exp(z, out=z)
+            z *= S0
+            price_paths[lo:hi, 1:] = z
+        
         terminal_prices = price_paths[:, -1]
         
         self.last_computation_time = time.perf_counter() - start_time
@@ -153,20 +160,20 @@ class MonteCarloEngine:
             S0, K, T, r, sigma, num_simulations, num_steps, option_type
         )
         
-        # Calculate intrinsic values at all time steps
-        if option_type.lower() == "call":
-            intrinsic_values = np.maximum(price_paths - K, 0)
-        else:  # put
-            intrinsic_values = np.maximum(K - price_paths, 0)
+        # Intrinsic value is computed on demand (a full matrix would double memory)
+        is_call = option_type.lower() == "call"
+        
+        def intrinsic(prices):
+            return np.maximum(prices - K, 0) if is_call else np.maximum(K - prices, 0)
         
         # Track cash flows: when and how much each path receives
         cash_flow_time = np.full(num_simulations, num_steps)  # Time of exercise (default: maturity)
-        cash_flow_amount = intrinsic_values[:, -1]  # Amount received (default: terminal payoff)
+        cash_flow_amount = intrinsic(price_paths[:, -1])  # Amount received (default: terminal payoff)
         
         # Backward induction using Longstaff-Schwartz algorithm
         for t in range(num_steps - 1, 0, -1):
             # Find paths that are in-the-money at time t
-            itm = intrinsic_values[:, t] > 0
+            itm = intrinsic(price_paths[:, t]) > 0
             
             if np.sum(itm) == 0:
                 continue
@@ -194,13 +201,13 @@ class MonteCarloEngine:
                 continuation_value = np.polyval(regression, X)
                 
                 # Exercise if immediate payoff exceeds continuation value
-                exercise_value = intrinsic_values[eligible, t]
+                exercise_value = intrinsic(X)
                 should_exercise = exercise_value > continuation_value
                 
                 # Update cash flows for paths that exercise now
                 exercise_indices = np.where(eligible)[0][should_exercise]
                 cash_flow_time[exercise_indices] = t
-                cash_flow_amount[exercise_indices] = intrinsic_values[exercise_indices, t]
+                cash_flow_amount[exercise_indices] = intrinsic(price_paths[exercise_indices, t])
         
         # At t=0 every path starts from S0, so there is a single decision:
         # exercise now if intrinsic value beats the *average* discounted
@@ -208,7 +215,7 @@ class MonteCarloEngine:
         # perfect foresight and bias the price upward.)
         present_values = cash_flow_amount * np.exp(-r * dt * cash_flow_time)
         continuation_value_0 = np.mean(present_values)
-        immediate_exercise_value = intrinsic_values[0, 0]
+        immediate_exercise_value = intrinsic(S0)
         option_price = max(continuation_value_0, immediate_exercise_value)
         
         computation_time = time.perf_counter() - start_time
