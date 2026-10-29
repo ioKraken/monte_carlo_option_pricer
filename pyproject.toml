@@ -25,3 +25,4 @@ py-modules = ["monte_carlo", "greeks", "market_data"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
