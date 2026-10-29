@@ -126,7 +126,7 @@ with tab1:
     col1, col2 = st.columns([2, 1])
     
     with col1:
-        if st.button("Calculate Option Price", type="primary", use_container_width=True):
+        if st.button("Calculate Option Price", type="primary", width='stretch'):
             with st.spinner("Running Monte Carlo simulation..."):
                 # Price the option
                 if option_style == "European":
@@ -210,12 +210,12 @@ with tab1:
                 ]
             })
             
-            st.dataframe(comparison_df, use_container_width=True, hide_index=True)
+            st.dataframe(comparison_df, width='stretch', hide_index=True)
         
         # Sensitivity analysis (runs ~20 extra pricings, so only on request)
         st.markdown("### Quick Sensitivity Analysis")
         
-        if st.button("Run Sensitivity Analysis", use_container_width=True):
+        if st.button("Run Sensitivity Analysis", width='stretch'):
             def _price(strike, vol):
                 if option_style == "European":
                     return st.session_state.mc_engine.price_european_option(
@@ -257,7 +257,7 @@ with tab1:
                 height=300,
                 margin=dict(l=0, r=0, t=30, b=0)
             )
-            st.plotly_chart(fig_strike, use_container_width=True)
+            st.plotly_chart(fig_strike, width='stretch')
         
           with col2:
             st.markdown("**Impact of Volatility**")
@@ -276,7 +276,7 @@ with tab1:
                 height=300,
                 margin=dict(l=0, r=0, t=30, b=0)
             )
-            st.plotly_chart(fig_vol, use_container_width=True)
+            st.plotly_chart(fig_vol, width='stretch')
 
 # Tab 2: Price Paths Visualization
 with tab2:
@@ -284,7 +284,7 @@ with tab2:
     
     num_paths_to_plot = st.slider("Number of Paths to Display", min_value=10, max_value=500, value=100, step=10)
     
-    if st.button("Generate Price Paths", use_container_width=True):
+    if st.button("Generate Price Paths", width='stretch'):
         with st.spinner("Simulating price paths..."):
             price_paths, terminal_prices = st.session_state.mc_engine.simulate_price_paths(
                 S0, K, T, r, sigma, num_paths_to_plot, num_steps, option_type.lower()
@@ -339,7 +339,7 @@ with tab2:
                 hovermode='closest'
             )
             
-            st.plotly_chart(fig_paths, use_container_width=True)
+            st.plotly_chart(fig_paths, width='stretch')
         
         with col2:
             st.markdown("### Terminal Price Distribution")
@@ -366,7 +366,7 @@ with tab2:
                 showlegend=False
             )
             
-            st.plotly_chart(fig_dist, use_container_width=True)
+            st.plotly_chart(fig_dist, width='stretch')
         
         # Statistics
         st.markdown("### Path Statistics")
@@ -396,7 +396,7 @@ with tab3:
     if option_style == "American":
         st.caption("Note: Greeks are European Black-Scholes values and are only an approximation for American options.")
     
-    if st.button("Calculate Greeks", use_container_width=True):
+    if st.button("Calculate Greeks", width='stretch'):
         greeks = GreeksCalculator.calculate_all_greeks(
             S0, K, T, r, sigma, option_type.lower()
         )
@@ -467,7 +467,7 @@ with tab3:
                 yaxis_title="Delta",
                 height=300
             )
-            st.plotly_chart(fig_delta, use_container_width=True)
+            st.plotly_chart(fig_delta, width='stretch')
             
             # Vega vs Volatility
             st.markdown("**Vega vs Volatility**")
@@ -486,7 +486,7 @@ with tab3:
                 yaxis_title="Vega",
                 height=300
             )
-            st.plotly_chart(fig_vega, use_container_width=True)
+            st.plotly_chart(fig_vega, width='stretch')
         
         with col2:
             # Gamma vs Stock Price
@@ -506,7 +506,7 @@ with tab3:
                 yaxis_title="Gamma",
                 height=300
             )
-            st.plotly_chart(fig_gamma, use_container_width=True)
+            st.plotly_chart(fig_gamma, width='stretch')
             
             # Theta vs Time
             st.markdown("**Theta vs Time to Expiration**")
@@ -525,7 +525,7 @@ with tab3:
                 yaxis_title="Theta (per day)",
                 height=300
             )
-            st.plotly_chart(fig_theta, use_container_width=True)
+            st.plotly_chart(fig_theta, width='stretch')
 
 # Tab 4: Performance Metrics
 with tab4:
@@ -537,7 +537,7 @@ with tab4:
     """)
     
     # Run performance benchmark
-    if st.button("Run Performance Benchmark", use_container_width=True):
+    if st.button("Run Performance Benchmark", width='stretch'):
         with st.spinner("Running benchmark..."):
             benchmark_results = []
             
@@ -576,7 +576,7 @@ with tab4:
                     'Time (ms)': '{:.2f}',
                     'Sims/Second': '{:,.0f}'
                 }),
-                use_container_width=True,
+                width='stretch',
                 hide_index=True
             )
             
@@ -631,7 +631,7 @@ with tab4:
             
             fig_perf.update_layout(height=600, showlegend=False)
             
-            st.plotly_chart(fig_perf, use_container_width=True)
+            st.plotly_chart(fig_perf, width='stretch')
 
 # Tab 5: Data Stream Simulation
 with tab5:
@@ -648,7 +648,7 @@ with tab5:
         stream_ticker = st.text_input("Ticker for Stream", value="AAPL")
         num_messages = st.slider("Number of Messages", min_value=100, max_value=10000, value=1000, step=100)
         
-        if st.button("Simulate Data Stream", use_container_width=True):
+        if st.button("Simulate Data Stream", width='stretch'):
             with st.spinner("Generating simulated stream..."):
                 t0 = time.perf_counter()
                 stream_data = st.session_state.market_feed.simulate_kafka_stream(
@@ -679,7 +679,7 @@ with tab5:
                     f"{st.session_state.stream_data['volume'].sum():,}"
                 ]
             })
-            st.dataframe(stream_stats, use_container_width=True, hide_index=True)
+            st.dataframe(stream_stats, width='stretch', hide_index=True)
         
         with col2:
             st.markdown("### Real-Time Price Stream")
@@ -701,7 +701,7 @@ with tab5:
                 hovermode='x unified'
             )
             
-            st.plotly_chart(fig_stream, use_container_width=True)
+            st.plotly_chart(fig_stream, width='stretch')
             
             # Volume chart
             st.markdown("### Volume Distribution")
@@ -720,7 +720,7 @@ with tab5:
                 height=300
             )
             
-            st.plotly_chart(fig_volume, use_container_width=True)
+            st.plotly_chart(fig_volume, width='stretch')
 
 # Footer
 st.markdown("---")
