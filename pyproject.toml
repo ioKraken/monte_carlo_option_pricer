@@ -1,7 +1,8 @@
 [project]
-name = "repl-nix-workspace"
+name = "monte-carlo-option-pricer"
 version = "0.1.0"
-description = "Add your description here"
+description = "Monte Carlo option pricing (European and American/LSM) with Black-Scholes Greeks and a Streamlit dashboard"
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "numpy>=2.3.5",
@@ -11,3 +12,16 @@ dependencies = [
     "streamlit>=1.51.0",
     "yfinance>=0.2.66",
 ]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["monte_carlo", "greeks", "market_data"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

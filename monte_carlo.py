@@ -10,8 +10,8 @@ class MonteCarloEngine:
     """
     
     def __init__(self, seed: int = 42):
-        """Initialize the Monte Carlo engine with a random seed."""
-        np.random.seed(seed)
+        """Initialize the Monte Carlo engine with its own seeded generator."""
+        self.rng = np.random.default_rng(seed)
         self.last_computation_time = 0
         self.last_num_simulations = 0
         
@@ -55,26 +55,23 @@ class MonteCarloEngine:
         terminal_prices : np.ndarray
             Array of terminal stock prices (num_simulations,)
         """
-        start_time = time.time()
+        start_time = time.perf_counter()
         
         dt = T / num_steps
         
-        # Pre-allocate array for efficiency
-        price_paths = np.zeros((num_simulations, num_steps + 1))
-        price_paths[:, 0] = S0
-        
         # Generate all random numbers at once for better performance
-        Z = np.random.standard_normal((num_simulations, num_steps))
-        
-        # Vectorized computation of price paths
-        for t in range(1, num_steps + 1):
-            price_paths[:, t] = price_paths[:, t-1] * np.exp(
-                (r - 0.5 * sigma**2) * dt + sigma * np.sqrt(dt) * Z[:, t-1]
-            )
-        
+        Z = self.rng.standard_normal((num_simulations, num_steps))
+
+        # Paths are S0 * exp(cumulative log-returns), fully vectorized
+        log_returns = (r - 0.5 * sigma**2) * dt + sigma * np.sqrt(dt) * Z
+        price_paths = np.empty((num_simulations, num_steps + 1))
+        price_paths[:, 0] = S0
+        np.cumsum(log_returns, axis=1, out=price_paths[:, 1:])
+        price_paths[:, 1:] = S0 * np.exp(price_paths[:, 1:])
+
         terminal_prices = price_paths[:, -1]
         
-        self.last_computation_time = time.time() - start_time
+        self.last_computation_time = time.perf_counter() - start_time
         self.last_num_simulations = num_simulations
         
         return price_paths, terminal_prices
@@ -101,10 +98,10 @@ class MonteCarloEngine:
         computation_time : float
             Time taken for computation (seconds)
         """
-        start_time = time.time()
+        start_time = time.perf_counter()
         
         # Simulate final stock prices
-        Z = np.random.standard_normal(num_simulations)
+        Z = self.rng.standard_normal(num_simulations)
         ST = S0 * np.exp((r - 0.5 * sigma**2) * T + sigma * np.sqrt(T) * Z)
         
         # Calculate payoffs
@@ -117,7 +114,7 @@ class MonteCarloEngine:
         option_price = np.exp(-r * T) * np.mean(payoffs)
         std_error = np.std(payoffs) / np.sqrt(num_simulations)
         
-        computation_time = time.time() - start_time
+        computation_time = time.perf_counter() - start_time
         
         # Update performance metrics
         self.last_computation_time = computation_time
@@ -146,7 +143,7 @@ class MonteCarloEngine:
         computation_time : float
             Time taken for computation (seconds)
         """
-        start_time = time.time()
+        start_time = time.perf_counter()
         
         dt = T / num_steps
         discount_factor = np.exp(-r * dt)
@@ -232,7 +229,7 @@ class MonteCarloEngine:
         immediate_exercise_value = np.mean(immediate_value)
         option_price = max(option_price, immediate_exercise_value)
         
-        computation_time = time.time() - start_time
+        computation_time = time.perf_counter() - start_time
         
         # Update performance metrics
         self.last_computation_time = computation_time

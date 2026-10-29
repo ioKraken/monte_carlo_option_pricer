@@ -5,8 +5,7 @@ from typing import Dict
 
 class GreeksCalculator:
     """
-    Calculator for option Greeks using both analytical (Black-Scholes) 
-    and numerical (finite difference) methods.
+    Calculator for European option Greeks using analytical Black-Scholes formulas.
     """
     
     @staticmethod

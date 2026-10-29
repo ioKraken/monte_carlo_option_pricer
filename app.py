@@ -46,12 +46,12 @@ if 'last_price_update' not in st.session_state:
     st.session_state.last_price_update = None
 
 # Title and description
-st.title(" Monte Carlo Option Pricer")
+st.title("Monte Carlo Option Pricer")
 st.markdown("""
 **High-Performance Option Pricing with Real-Time Market Data**
 
 This application uses Monte Carlo simulation to estimate the fair value of financial options.
-Optimized for rapid computation and high-frequency demand forecasting.
+Includes Black-Scholes comparison, Greeks and a performance benchmark.
 """)
 
 # Sidebar - Input Parameters
@@ -66,14 +66,23 @@ if use_live_data:
     if st.sidebar.button("Fetch Market Data"):
         with st.spinner("Fetching market data..."):
             market_data = st.session_state.market_feed.get_stock_data(ticker)
-            st.session_state.market_data = market_data
-            st.session_state.last_price_update = datetime.now()
+            if 'error' in market_data:
+                st.session_state.pop('market_data', None)
+                st.session_state.market_error = f"Could not fetch '{ticker}': {market_data['error']}"
+            else:
+                st.session_state.pop('market_error', None)
+                st.session_state.market_data = market_data
+                st.session_state.last_price_update = datetime.now()
     
-    if 'market_data' in st.session_state:
+    if 'market_error' in st.session_state:
+        st.sidebar.error(st.session_state.market_error + " Enter values manually.")
+    
+    if st.session_state.get('market_data', {}).get('ticker') == ticker:
         st.sidebar.success(f"✓ {st.session_state.market_data['company_name']}")
         st.sidebar.metric("Current Price", f"${st.session_state.market_data['current_price']:.2f}")
         S0 = st.session_state.market_data['current_price']
-        sigma = st.session_state.market_data['volatility']
+        sigma = float(np.clip(st.session_state.market_data['volatility'], 0.01, 1.0))
+        st.sidebar.caption(f"Volatility: 3-month historical, {sigma:.1%}")
     else:
         S0 = st.sidebar.number_input("Spot Price (S₀)", value=100.0, min_value=0.01, step=1.0)
         sigma = st.sidebar.slider("Volatility (σ)", min_value=0.01, max_value=1.0, value=0.25, step=0.01)
@@ -91,17 +100,23 @@ option_style = st.sidebar.selectbox("Option Style", ["European", "American"])
 st.sidebar.markdown("---")
 st.sidebar.header("Simulation Parameters")
 
+# American (LSM) keeps the full path matrix in memory, so it is capped lower
+sim_options = [1000, 5000, 10000, 50000, 100000, 500000, 1000000]
+if option_style == "American":
+    sim_options = [n for n in sim_options if n <= 200000]
 num_simulations = st.sidebar.select_slider(
     "Number of Simulations",
-    options=[1000, 5000, 10000, 50000, 100000, 500000, 1000000],
+    options=sim_options,
     value=100000
 )
 
 num_steps = st.sidebar.slider("Time Steps", min_value=10, max_value=500, value=100, step=10)
 
+params = (S0, K, T, r, sigma, option_type, option_style, num_simulations, num_steps)
+
 # Main content area with tabs
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    " Pricing", "Price Paths", " Greeks", "⚡ Performance", "🌊 Data Stream"
+    "📊 Pricing", "📈 Price Paths", "🧮 Greeks", "⚡ Performance", "🌊 Data Stream"
 ])
 
 # Tab 1: Option Pricing
@@ -124,6 +139,7 @@ with tab1:
                         S0, K, T, r, sigma, option_type.lower()
                     )
                     
+                    st.session_state.result_params = params
                     st.session_state.option_price = option_price
                     st.session_state.bs_price = bs_price
                     st.session_state.std_error = std_error
@@ -134,13 +150,17 @@ with tab1:
                         S0, K, T, r, sigma, num_simulations, num_steps, option_type.lower()
                     )
                     
+                    st.session_state.result_params = params
                     st.session_state.option_price = option_price
                     st.session_state.comp_time = comp_time
                     st.session_state.std_error = None
                     st.session_state.bs_price = None
     
     # Display results
-    if 'option_price' in st.session_state:
+    if st.session_state.get('result_params') != params:
+        if 'option_price' in st.session_state:
+            st.info("Inputs changed since the last run. Click **Calculate Option Price** to update.")
+    else:
         st.markdown("### Pricing Results")
         
         col1, col2, col3, col4 = st.columns(4)
@@ -192,26 +212,37 @@ with tab1:
             
             st.dataframe(comparison_df, use_container_width=True, hide_index=True)
         
-        # Sensitivity analysis
+        # Sensitivity analysis (runs ~20 extra pricings, so only on request)
         st.markdown("### Quick Sensitivity Analysis")
         
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("**Impact of Strike Price**")
-            strikes = np.linspace(S0 * 0.8, S0 * 1.2, 10)
-            prices = []
-            
-            for strike in strikes:
+        if st.button("Run Sensitivity Analysis", use_container_width=True):
+            def _price(strike, vol):
                 if option_style == "European":
-                    price, _, _ = st.session_state.mc_engine.price_european_option(
-                        S0, strike, T, r, sigma, num_simulations // 10, option_type.lower()
-                    )
-                else:
-                    price, _ = st.session_state.mc_engine.price_american_option_lsm(
-                        S0, strike, T, r, sigma, num_simulations // 10, num_steps, option_type.lower()
-                    )
-                prices.append(price)
+                    return st.session_state.mc_engine.price_european_option(
+                        S0, strike, T, r, vol, num_simulations // 10, option_type.lower()
+                    )[0]
+                return st.session_state.mc_engine.price_american_option_lsm(
+                    S0, strike, T, r, vol, num_simulations // 10, num_steps, option_type.lower()
+                )[0]
+            
+            with st.spinner("Running sensitivity analysis..."):
+                strikes = np.linspace(S0 * 0.8, S0 * 1.2, 10)
+                vols = np.linspace(max(0.05, sigma * 0.4), sigma * 1.6, 10)
+                st.session_state.sensitivity = {
+                    'params': params,
+                    'strikes': strikes,
+                    'prices': [_price(k, sigma) for k in strikes],
+                    'vols': vols,
+                    'vol_prices': [_price(K, v) for v in vols],
+                }
+        
+        sens = st.session_state.get('sensitivity')
+        if sens and sens['params'] == params:
+          col1, col2 = st.columns(2)
+          
+          with col1:
+            st.markdown("**Impact of Strike Price**")
+            strikes, prices = sens['strikes'], sens['prices']
             
             fig_strike = go.Figure()
             fig_strike.add_trace(go.Scatter(
@@ -228,21 +259,9 @@ with tab1:
             )
             st.plotly_chart(fig_strike, use_container_width=True)
         
-        with col2:
+          with col2:
             st.markdown("**Impact of Volatility**")
-            vols = np.linspace(0.1, 0.5, 10)
-            vol_prices = []
-            
-            for vol in vols:
-                if option_style == "European":
-                    price, _, _ = st.session_state.mc_engine.price_european_option(
-                        S0, K, T, r, vol, num_simulations // 10, option_type.lower()
-                    )
-                else:
-                    price, _ = st.session_state.mc_engine.price_american_option_lsm(
-                        S0, K, T, r, vol, num_simulations // 10, num_steps, option_type.lower()
-                    )
-                vol_prices.append(price)
+            vols, vol_prices = sens['vols'], sens['vol_prices']
             
             fig_vol = go.Figure()
             fig_vol.add_trace(go.Scatter(
@@ -372,8 +391,10 @@ with tab3:
     
     st.markdown("""
     Greeks measure the sensitivity of an option's price to various factors.
-    These are calculated using the Black-Scholes model.
+    These are calculated using the Black-Scholes model (European exercise).
     """)
+    if option_style == "American":
+        st.caption("Note: Greeks are European Black-Scholes values and are only an approximation for American options.")
     
     if st.button("Calculate Greeks", use_container_width=True):
         greeks = GreeksCalculator.calculate_all_greeks(
@@ -512,7 +533,7 @@ with tab4:
     
     st.markdown("""
     Monitor the computational performance of the Monte Carlo engine.
-    Optimized for high-frequency demand forecasting with 10,000+ simulations per second.
+    Throughput is measured on this machine, so results vary with hardware.
     """)
     
     # Run performance benchmark
@@ -617,8 +638,8 @@ with tab5:
     st.header("Real-Time Data Stream Simulation")
     
     st.markdown("""
-    Simulated Kafka-like data stream for live market synchronization.
-    In production, this would connect to a real Kafka broker processing 10,000+ messages/second.
+    Simulated Kafka-style tick stream (random-walk prices seeded from the latest Yahoo price).
+    No Kafka broker is used; this is a demo of what a streaming feed would look like.
     """)
     
     col1, col2 = st.columns([1, 2])
@@ -629,23 +650,22 @@ with tab5:
         
         if st.button("Simulate Data Stream", use_container_width=True):
             with st.spinner("Generating simulated stream..."):
+                t0 = time.perf_counter()
                 stream_data = st.session_state.market_feed.simulate_kafka_stream(
-                    stream_ticker, num_messages
+                    stream_ticker.upper(), num_messages
                 )
+                gen_time = time.perf_counter() - t0
                 st.session_state.stream_data = stream_data
-                
-                # Calculate message rate
-                time_span = (stream_data['timestamp'].iloc[-1] - stream_data['timestamp'].iloc[0]).total_seconds()
-                message_rate = len(stream_data) / time_span if time_span > 0 else 0
-                st.session_state.message_rate = message_rate
+                st.session_state.message_rate = len(stream_data) / gen_time if gen_time > 0 else 0
     
     if 'stream_data' in st.session_state:
         with col1:
             st.metric("Messages Processed", f"{len(st.session_state.stream_data):,}")
-            st.metric("Message Rate", f"{st.session_state.message_rate:,.0f} msg/sec")
-            
-            if st.session_state.message_rate >= 10000:
-                st.success("✓ Meets high-frequency requirement")
+            st.metric(
+                "Generation Throughput",
+                f"{st.session_state.message_rate:,.0f} msg/sec",
+                help="How fast this app generates the simulated messages (includes the Yahoo price lookup). No real Kafka broker is involved."
+            )
             
             # Stream statistics
             st.markdown("### Stream Statistics")
@@ -706,6 +726,6 @@ with tab5:
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666;'>
-    <p>Monte Carlo Option Pricer | High-Performance Financial Modeling | Nov 2024 – May 2025</p>
+    <p>Monte Carlo Option Pricer | Educational tool, not financial advice</p>
 </div>
 """, unsafe_allow_html=True)
