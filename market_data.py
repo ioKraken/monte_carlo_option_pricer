@@ -34,31 +34,36 @@ class MarketDataFeed:
             # Fetch stock data
             stock = yf.Ticker(ticker)
             
-            # Get current price
+            # Current price: latest 1-minute bar if live, else latest daily close
             if use_live:
-                hist = stock.history(period="1d", interval="1m")
-                if len(hist) > 0:
-                    current_price = hist['Close'].iloc[-1]
+                intraday = stock.history(period="1d", interval="1m")
+                if len(intraday) > 0:
+                    current_price = intraday['Close'].iloc[-1]
                 else:
-                    hist = stock.history(period="5d")
-                    current_price = hist['Close'].iloc[-1]
+                    current_price = stock.history(period="5d")['Close'].iloc[-1]
             else:
-                hist = stock.history(period="1mo")
-                current_price = hist['Close'].iloc[-1]
-            
-            # Calculate historical volatility (annualized)
+                current_price = stock.history(period="1mo")['Close'].iloc[-1]
+
+            # Volatility is always estimated from DAILY closes (annualized with
+            # sqrt(252)); intraday bars would need a different scaling factor.
+            hist = stock.history(period="3mo", interval="1d")
+            if len(hist) < 2:
+                raise ValueError(f"No price history returned for '{ticker}'")
             returns = np.log(hist['Close'] / hist['Close'].shift(1))
-            volatility = returns.std() * np.sqrt(252)  # Annualized
-            
-            # Get additional info
-            info = stock.info
-            
+            volatility = returns.std() * np.sqrt(252)
+
+            # Company name is optional; stock.info is slow and often fails
+            try:
+                company_name = stock.info.get('longName', ticker)
+            except Exception:
+                company_name = ticker
+
             data = {
                 'ticker': ticker,
                 'current_price': float(current_price),
                 'volatility': float(volatility) if not np.isnan(volatility) else 0.25,
                 'timestamp': datetime.now(),
-                'company_name': info.get('longName', ticker),
+                'company_name': company_name,
                 'previous_close': float(hist['Close'].iloc[-2]) if len(hist) > 1 else float(current_price),
             }
             
@@ -68,9 +73,9 @@ class MarketDataFeed:
             return data
             
         except Exception as e:
-            # Return cached data or defaults if fetch fails
+            # Return cached data (flagged) or defaults if fetch fails
             if ticker in self.cache:
-                return self.cache[ticker]
+                return {**self.cache[ticker], 'error': str(e)}
             else:
                 return {
                     'ticker': ticker,
@@ -98,7 +103,7 @@ class MarketDataFeed:
         --------
         pd.DataFrame : Simulated streaming data
         """
-        # Get base price
+        # Get base price (uses fallback values if the fetch fails)
         data = self.get_stock_data(ticker)
         base_price = data['current_price']
         volatility = data['volatility']
@@ -175,5 +180,5 @@ class MarketDataFeed:
             else:
                 return 0.04  # Default 4% if fetch fails
                 
-        except:
+        except Exception:
             return 0.04  # Default 4%

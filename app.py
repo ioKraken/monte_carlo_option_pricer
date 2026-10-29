@@ -4,6 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
+import re
 import time
 from datetime import datetime
 
@@ -37,6 +38,19 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+MAX_LSM_CELLS = 20_000_000  # sims x (steps+1) cap for American pricing (~160 MB per matrix)
+TICKER_PATTERN = re.compile(r"^[A-Z0-9.\-^=]{1,15}$")
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_market_data(ticker: str) -> dict:
+    """Cached Yahoo lookup: shared hosts get rate-limited if every rerun hits the API."""
+    data = MarketDataFeed().get_stock_data(ticker)
+    if 'error' in data:
+        raise RuntimeError(data['error'])  # exceptions are never cached
+    return data
+
+
 # Initialize session state
 if 'mc_engine' not in st.session_state:
     st.session_state.mc_engine = MonteCarloEngine()
@@ -46,12 +60,12 @@ if 'last_price_update' not in st.session_state:
     st.session_state.last_price_update = None
 
 # Title and description
-st.title(" Monte Carlo Option Pricer")
+st.title("Monte Carlo Option Pricer")
 st.markdown("""
 **High-Performance Option Pricing with Real-Time Market Data**
 
 This application uses Monte Carlo simulation to estimate the fair value of financial options.
-Optimized for rapid computation and high-frequency demand forecasting.
+Includes Black-Scholes comparison, Greeks and a performance benchmark.
 """)
 
 # Sidebar - Input Parameters
@@ -61,19 +75,30 @@ st.sidebar.header("Option Parameters")
 use_live_data = st.sidebar.checkbox("Use Live Market Data", value=False)
 
 if use_live_data:
-    ticker = st.sidebar.text_input("Stock Ticker", value="AAPL").upper()
+    ticker = st.sidebar.text_input("Stock Ticker", value="AAPL", max_chars=15).strip().upper()
+    ticker_ok = bool(TICKER_PATTERN.match(ticker))
+    if not ticker_ok:
+        st.sidebar.warning("Enter a valid ticker symbol (letters, digits, . - ^ =).")
     
-    if st.sidebar.button("Fetch Market Data"):
+    if st.sidebar.button("Fetch Market Data", disabled=not ticker_ok):
         with st.spinner("Fetching market data..."):
-            market_data = st.session_state.market_feed.get_stock_data(ticker)
-            st.session_state.market_data = market_data
-            st.session_state.last_price_update = datetime.now()
+            try:
+                st.session_state.market_data = fetch_market_data(ticker)
+                st.session_state.pop('market_error', None)
+                st.session_state.last_price_update = datetime.now()
+            except RuntimeError as e:
+                st.session_state.pop('market_data', None)
+                st.session_state.market_error = f"Could not fetch '{ticker}': {e}"
     
-    if 'market_data' in st.session_state:
+    if 'market_error' in st.session_state:
+        st.sidebar.error(st.session_state.market_error + " Enter values manually.")
+    
+    if st.session_state.get('market_data', {}).get('ticker') == ticker:
         st.sidebar.success(f"✓ {st.session_state.market_data['company_name']}")
         st.sidebar.metric("Current Price", f"${st.session_state.market_data['current_price']:.2f}")
         S0 = st.session_state.market_data['current_price']
-        sigma = st.session_state.market_data['volatility']
+        sigma = float(np.clip(st.session_state.market_data['volatility'], 0.01, 1.0))
+        st.sidebar.caption(f"Volatility: 3-month historical, {sigma:.1%}")
     else:
         S0 = st.sidebar.number_input("Spot Price (S₀)", value=100.0, min_value=0.01, step=1.0)
         sigma = st.sidebar.slider("Volatility (σ)", min_value=0.01, max_value=1.0, value=0.25, step=0.01)
@@ -91,17 +116,25 @@ option_style = st.sidebar.selectbox("Option Style", ["European", "American"])
 st.sidebar.markdown("---")
 st.sidebar.header("Simulation Parameters")
 
+num_steps = st.sidebar.slider("Time Steps", min_value=10, max_value=500, value=100, step=10)
+
+# American (LSM) keeps the full path matrix in memory, so total size is capped
+sim_options = [1000, 5000, 10000, 50000, 100000, 500000, 1000000]
+if option_style == "American":
+    sim_options = [n for n in sim_options if n * (num_steps + 1) <= MAX_LSM_CELLS and n <= 200000]
+    st.sidebar.caption("American options: simulations are limited by simulations × time steps to keep memory low.")
 num_simulations = st.sidebar.select_slider(
     "Number of Simulations",
-    options=[1000, 5000, 10000, 50000, 100000, 500000, 1000000],
-    value=100000
+    options=sim_options,
+    value=100000 if 100000 in sim_options else sim_options[-1]
 )
 
-num_steps = st.sidebar.slider("Time Steps", min_value=10, max_value=500, value=100, step=10)
+
+params = (S0, K, T, r, sigma, option_type, option_style, num_simulations, num_steps)
 
 # Main content area with tabs
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    " Pricing", "Price Paths", " Greeks", "⚡ Performance", "🌊 Data Stream"
+    "📊 Pricing", "📈 Price Paths", "🧮 Greeks", "⚡ Performance", "🌊 Data Stream"
 ])
 
 # Tab 1: Option Pricing
@@ -111,7 +144,7 @@ with tab1:
     col1, col2 = st.columns([2, 1])
     
     with col1:
-        if st.button("Calculate Option Price", type="primary", use_container_width=True):
+        if st.button("Calculate Option Price", type="primary", width='stretch'):
             with st.spinner("Running Monte Carlo simulation..."):
                 # Price the option
                 if option_style == "European":
@@ -124,6 +157,7 @@ with tab1:
                         S0, K, T, r, sigma, option_type.lower()
                     )
                     
+                    st.session_state.result_params = params
                     st.session_state.option_price = option_price
                     st.session_state.bs_price = bs_price
                     st.session_state.std_error = std_error
@@ -134,13 +168,17 @@ with tab1:
                         S0, K, T, r, sigma, num_simulations, num_steps, option_type.lower()
                     )
                     
+                    st.session_state.result_params = params
                     st.session_state.option_price = option_price
                     st.session_state.comp_time = comp_time
                     st.session_state.std_error = None
                     st.session_state.bs_price = None
     
     # Display results
-    if 'option_price' in st.session_state:
+    if st.session_state.get('result_params') != params:
+        if 'option_price' in st.session_state:
+            st.info("Inputs changed since the last run. Click **Calculate Option Price** to update.")
+    else:
         st.markdown("### Pricing Results")
         
         col1, col2, col3, col4 = st.columns(4)
@@ -190,28 +228,39 @@ with tab1:
                 ]
             })
             
-            st.dataframe(comparison_df, use_container_width=True, hide_index=True)
+            st.dataframe(comparison_df, width='stretch', hide_index=True)
         
-        # Sensitivity analysis
+        # Sensitivity analysis (runs ~20 extra pricings, so only on request)
         st.markdown("### Quick Sensitivity Analysis")
         
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("**Impact of Strike Price**")
-            strikes = np.linspace(S0 * 0.8, S0 * 1.2, 10)
-            prices = []
-            
-            for strike in strikes:
+        if st.button("Run Sensitivity Analysis", width='stretch'):
+            def _price(strike, vol):
                 if option_style == "European":
-                    price, _, _ = st.session_state.mc_engine.price_european_option(
-                        S0, strike, T, r, sigma, num_simulations // 10, option_type.lower()
-                    )
-                else:
-                    price, _ = st.session_state.mc_engine.price_american_option_lsm(
-                        S0, strike, T, r, sigma, num_simulations // 10, num_steps, option_type.lower()
-                    )
-                prices.append(price)
+                    return st.session_state.mc_engine.price_european_option(
+                        S0, strike, T, r, vol, num_simulations // 10, option_type.lower()
+                    )[0]
+                return st.session_state.mc_engine.price_american_option_lsm(
+                    S0, strike, T, r, vol, num_simulations // 10, num_steps, option_type.lower()
+                )[0]
+            
+            with st.spinner("Running sensitivity analysis..."):
+                strikes = np.linspace(S0 * 0.8, S0 * 1.2, 10)
+                vols = np.linspace(max(0.05, sigma * 0.4), sigma * 1.6, 10)
+                st.session_state.sensitivity = {
+                    'params': params,
+                    'strikes': strikes,
+                    'prices': [_price(k, sigma) for k in strikes],
+                    'vols': vols,
+                    'vol_prices': [_price(K, v) for v in vols],
+                }
+        
+        sens = st.session_state.get('sensitivity')
+        if sens and sens['params'] == params:
+          col1, col2 = st.columns(2)
+          
+          with col1:
+            st.markdown("**Impact of Strike Price**")
+            strikes, prices = sens['strikes'], sens['prices']
             
             fig_strike = go.Figure()
             fig_strike.add_trace(go.Scatter(
@@ -226,23 +275,11 @@ with tab1:
                 height=300,
                 margin=dict(l=0, r=0, t=30, b=0)
             )
-            st.plotly_chart(fig_strike, use_container_width=True)
+            st.plotly_chart(fig_strike, width='stretch')
         
-        with col2:
+          with col2:
             st.markdown("**Impact of Volatility**")
-            vols = np.linspace(0.1, 0.5, 10)
-            vol_prices = []
-            
-            for vol in vols:
-                if option_style == "European":
-                    price, _, _ = st.session_state.mc_engine.price_european_option(
-                        S0, K, T, r, vol, num_simulations // 10, option_type.lower()
-                    )
-                else:
-                    price, _ = st.session_state.mc_engine.price_american_option_lsm(
-                        S0, K, T, r, vol, num_simulations // 10, num_steps, option_type.lower()
-                    )
-                vol_prices.append(price)
+            vols, vol_prices = sens['vols'], sens['vol_prices']
             
             fig_vol = go.Figure()
             fig_vol.add_trace(go.Scatter(
@@ -257,7 +294,7 @@ with tab1:
                 height=300,
                 margin=dict(l=0, r=0, t=30, b=0)
             )
-            st.plotly_chart(fig_vol, use_container_width=True)
+            st.plotly_chart(fig_vol, width='stretch')
 
 # Tab 2: Price Paths Visualization
 with tab2:
@@ -265,7 +302,7 @@ with tab2:
     
     num_paths_to_plot = st.slider("Number of Paths to Display", min_value=10, max_value=500, value=100, step=10)
     
-    if st.button("Generate Price Paths", use_container_width=True):
+    if st.button("Generate Price Paths", width='stretch'):
         with st.spinner("Simulating price paths..."):
             price_paths, terminal_prices = st.session_state.mc_engine.simulate_price_paths(
                 S0, K, T, r, sigma, num_paths_to_plot, num_steps, option_type.lower()
@@ -320,7 +357,7 @@ with tab2:
                 hovermode='closest'
             )
             
-            st.plotly_chart(fig_paths, use_container_width=True)
+            st.plotly_chart(fig_paths, width='stretch')
         
         with col2:
             st.markdown("### Terminal Price Distribution")
@@ -347,7 +384,7 @@ with tab2:
                 showlegend=False
             )
             
-            st.plotly_chart(fig_dist, use_container_width=True)
+            st.plotly_chart(fig_dist, width='stretch')
         
         # Statistics
         st.markdown("### Path Statistics")
@@ -372,10 +409,12 @@ with tab3:
     
     st.markdown("""
     Greeks measure the sensitivity of an option's price to various factors.
-    These are calculated using the Black-Scholes model.
+    These are calculated using the Black-Scholes model (European exercise).
     """)
+    if option_style == "American":
+        st.caption("Note: Greeks are European Black-Scholes values and are only an approximation for American options.")
     
-    if st.button("Calculate Greeks", use_container_width=True):
+    if st.button("Calculate Greeks", width='stretch'):
         greeks = GreeksCalculator.calculate_all_greeks(
             S0, K, T, r, sigma, option_type.lower()
         )
@@ -446,7 +485,7 @@ with tab3:
                 yaxis_title="Delta",
                 height=300
             )
-            st.plotly_chart(fig_delta, use_container_width=True)
+            st.plotly_chart(fig_delta, width='stretch')
             
             # Vega vs Volatility
             st.markdown("**Vega vs Volatility**")
@@ -465,7 +504,7 @@ with tab3:
                 yaxis_title="Vega",
                 height=300
             )
-            st.plotly_chart(fig_vega, use_container_width=True)
+            st.plotly_chart(fig_vega, width='stretch')
         
         with col2:
             # Gamma vs Stock Price
@@ -485,7 +524,7 @@ with tab3:
                 yaxis_title="Gamma",
                 height=300
             )
-            st.plotly_chart(fig_gamma, use_container_width=True)
+            st.plotly_chart(fig_gamma, width='stretch')
             
             # Theta vs Time
             st.markdown("**Theta vs Time to Expiration**")
@@ -504,7 +543,7 @@ with tab3:
                 yaxis_title="Theta (per day)",
                 height=300
             )
-            st.plotly_chart(fig_theta, use_container_width=True)
+            st.plotly_chart(fig_theta, width='stretch')
 
 # Tab 4: Performance Metrics
 with tab4:
@@ -512,15 +551,17 @@ with tab4:
     
     st.markdown("""
     Monitor the computational performance of the Monte Carlo engine.
-    Optimized for high-frequency demand forecasting with 10,000+ simulations per second.
+    Throughput is measured on this machine, so results vary with hardware.
     """)
     
     # Run performance benchmark
-    if st.button("Run Performance Benchmark", use_container_width=True):
+    if st.button("Run Performance Benchmark", width='stretch'):
         with st.spinner("Running benchmark..."):
             benchmark_results = []
             
             sim_counts = [1000, 5000, 10000, 50000, 100000]
+            if option_style == "American":
+                sim_counts = [n for n in sim_counts if n * (num_steps + 1) <= MAX_LSM_CELLS]
             
             for sim_count in sim_counts:
                 start_time = time.time()
@@ -555,7 +596,7 @@ with tab4:
                     'Time (ms)': '{:.2f}',
                     'Sims/Second': '{:,.0f}'
                 }),
-                use_container_width=True,
+                width='stretch',
                 hide_index=True
             )
             
@@ -610,42 +651,41 @@ with tab4:
             
             fig_perf.update_layout(height=600, showlegend=False)
             
-            st.plotly_chart(fig_perf, use_container_width=True)
+            st.plotly_chart(fig_perf, width='stretch')
 
 # Tab 5: Data Stream Simulation
 with tab5:
     st.header("Real-Time Data Stream Simulation")
     
     st.markdown("""
-    Simulated Kafka-like data stream for live market synchronization.
-    In production, this would connect to a real Kafka broker processing 10,000+ messages/second.
+    Simulated Kafka-style tick stream (random-walk prices seeded from the latest Yahoo price).
+    No Kafka broker is used; this is a demo of what a streaming feed would look like.
     """)
     
     col1, col2 = st.columns([1, 2])
     
     with col1:
-        stream_ticker = st.text_input("Ticker for Stream", value="AAPL")
+        stream_ticker = st.text_input("Ticker for Stream", value="AAPL", max_chars=15).strip().upper()
         num_messages = st.slider("Number of Messages", min_value=100, max_value=10000, value=1000, step=100)
         
-        if st.button("Simulate Data Stream", use_container_width=True):
+        if st.button("Simulate Data Stream", width='stretch', disabled=not TICKER_PATTERN.match(stream_ticker)):
             with st.spinner("Generating simulated stream..."):
+                t0 = time.perf_counter()
                 stream_data = st.session_state.market_feed.simulate_kafka_stream(
                     stream_ticker, num_messages
                 )
+                gen_time = time.perf_counter() - t0
                 st.session_state.stream_data = stream_data
-                
-                # Calculate message rate
-                time_span = (stream_data['timestamp'].iloc[-1] - stream_data['timestamp'].iloc[0]).total_seconds()
-                message_rate = len(stream_data) / time_span if time_span > 0 else 0
-                st.session_state.message_rate = message_rate
+                st.session_state.message_rate = len(stream_data) / gen_time if gen_time > 0 else 0
     
     if 'stream_data' in st.session_state:
         with col1:
             st.metric("Messages Processed", f"{len(st.session_state.stream_data):,}")
-            st.metric("Message Rate", f"{st.session_state.message_rate:,.0f} msg/sec")
-            
-            if st.session_state.message_rate >= 10000:
-                st.success("✓ Meets high-frequency requirement")
+            st.metric(
+                "Generation Throughput",
+                f"{st.session_state.message_rate:,.0f} msg/sec",
+                help="How fast this app generates the simulated messages (includes the Yahoo price lookup). No real Kafka broker is involved."
+            )
             
             # Stream statistics
             st.markdown("### Stream Statistics")
@@ -659,7 +699,7 @@ with tab5:
                     f"{st.session_state.stream_data['volume'].sum():,}"
                 ]
             })
-            st.dataframe(stream_stats, use_container_width=True, hide_index=True)
+            st.dataframe(stream_stats, width='stretch', hide_index=True)
         
         with col2:
             st.markdown("### Real-Time Price Stream")
@@ -681,7 +721,7 @@ with tab5:
                 hovermode='x unified'
             )
             
-            st.plotly_chart(fig_stream, use_container_width=True)
+            st.plotly_chart(fig_stream, width='stretch')
             
             # Volume chart
             st.markdown("### Volume Distribution")
@@ -700,12 +740,12 @@ with tab5:
                 height=300
             )
             
-            st.plotly_chart(fig_volume, use_container_width=True)
+            st.plotly_chart(fig_volume, width='stretch')
 
 # Footer
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666;'>
-    <p>Monte Carlo Option Pricer | High-Performance Financial Modeling | Nov 2024 – May 2025</p>
+    <p>Monte Carlo Option Pricer | Educational tool, not financial advice</p>
 </div>
 """, unsafe_allow_html=True)

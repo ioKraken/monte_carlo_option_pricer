@@ -10,8 +10,8 @@ class MonteCarloEngine:
     """
     
     def __init__(self, seed: int = 42):
-        """Initialize the Monte Carlo engine with a random seed."""
-        np.random.seed(seed)
+        """Initialize the Monte Carlo engine with its own seeded generator."""
+        self.rng = np.random.default_rng(seed)
         self.last_computation_time = 0
         self.last_num_simulations = 0
         
@@ -55,26 +55,30 @@ class MonteCarloEngine:
         terminal_prices : np.ndarray
             Array of terminal stock prices (num_simulations,)
         """
-        start_time = time.time()
+        start_time = time.perf_counter()
         
         dt = T / num_steps
         
-        # Pre-allocate array for efficiency
-        price_paths = np.zeros((num_simulations, num_steps + 1))
+        # Build paths in one (num_simulations x num_steps+1) matrix, filling it
+        # in row blocks so only a small temporary is alive besides the result.
+        price_paths = np.empty((num_simulations, num_steps + 1))
         price_paths[:, 0] = S0
-        
-        # Generate all random numbers at once for better performance
-        Z = np.random.standard_normal((num_simulations, num_steps))
-        
-        # Vectorized computation of price paths
-        for t in range(1, num_steps + 1):
-            price_paths[:, t] = price_paths[:, t-1] * np.exp(
-                (r - 0.5 * sigma**2) * dt + sigma * np.sqrt(dt) * Z[:, t-1]
-            )
+        drift = (r - 0.5 * sigma**2) * dt
+        diffusion = sigma * np.sqrt(dt)
+        block = max(1, 2_000_000 // num_steps)
+        for lo in range(0, num_simulations, block):
+            hi = min(lo + block, num_simulations)
+            z = self.rng.standard_normal((hi - lo, num_steps))
+            z *= diffusion
+            z += drift
+            np.cumsum(z, axis=1, out=z)
+            np.exp(z, out=z)
+            z *= S0
+            price_paths[lo:hi, 1:] = z
         
         terminal_prices = price_paths[:, -1]
         
-        self.last_computation_time = time.time() - start_time
+        self.last_computation_time = time.perf_counter() - start_time
         self.last_num_simulations = num_simulations
         
         return price_paths, terminal_prices
@@ -101,10 +105,10 @@ class MonteCarloEngine:
         computation_time : float
             Time taken for computation (seconds)
         """
-        start_time = time.time()
+        start_time = time.perf_counter()
         
         # Simulate final stock prices
-        Z = np.random.standard_normal(num_simulations)
+        Z = self.rng.standard_normal(num_simulations)
         ST = S0 * np.exp((r - 0.5 * sigma**2) * T + sigma * np.sqrt(T) * Z)
         
         # Calculate payoffs
@@ -117,7 +121,7 @@ class MonteCarloEngine:
         option_price = np.exp(-r * T) * np.mean(payoffs)
         std_error = np.std(payoffs) / np.sqrt(num_simulations)
         
-        computation_time = time.time() - start_time
+        computation_time = time.perf_counter() - start_time
         
         # Update performance metrics
         self.last_computation_time = computation_time
@@ -146,7 +150,7 @@ class MonteCarloEngine:
         computation_time : float
             Time taken for computation (seconds)
         """
-        start_time = time.time()
+        start_time = time.perf_counter()
         
         dt = T / num_steps
         discount_factor = np.exp(-r * dt)
@@ -156,20 +160,20 @@ class MonteCarloEngine:
             S0, K, T, r, sigma, num_simulations, num_steps, option_type
         )
         
-        # Calculate intrinsic values at all time steps
-        if option_type.lower() == "call":
-            intrinsic_values = np.maximum(price_paths - K, 0)
-        else:  # put
-            intrinsic_values = np.maximum(K - price_paths, 0)
+        # Intrinsic value is computed on demand (a full matrix would double memory)
+        is_call = option_type.lower() == "call"
+        
+        def intrinsic(prices):
+            return np.maximum(prices - K, 0) if is_call else np.maximum(K - prices, 0)
         
         # Track cash flows: when and how much each path receives
         cash_flow_time = np.full(num_simulations, num_steps)  # Time of exercise (default: maturity)
-        cash_flow_amount = intrinsic_values[:, -1]  # Amount received (default: terminal payoff)
+        cash_flow_amount = intrinsic(price_paths[:, -1])  # Amount received (default: terminal payoff)
         
         # Backward induction using Longstaff-Schwartz algorithm
         for t in range(num_steps - 1, 0, -1):
             # Find paths that are in-the-money at time t
-            itm = intrinsic_values[:, t] > 0
+            itm = intrinsic(price_paths[:, t]) > 0
             
             if np.sum(itm) == 0:
                 continue
@@ -197,42 +201,24 @@ class MonteCarloEngine:
                 continuation_value = np.polyval(regression, X)
                 
                 # Exercise if immediate payoff exceeds continuation value
-                exercise_value = intrinsic_values[eligible, t]
+                exercise_value = intrinsic(X)
                 should_exercise = exercise_value > continuation_value
                 
                 # Update cash flows for paths that exercise now
                 exercise_indices = np.where(eligible)[0][should_exercise]
                 cash_flow_time[exercise_indices] = t
-                cash_flow_amount[exercise_indices] = intrinsic_values[exercise_indices, t]
+                cash_flow_amount[exercise_indices] = intrinsic(price_paths[exercise_indices, t])
         
-        # Consider immediate exercise at t=0
-        immediate_value = intrinsic_values[:, 0]
-        not_exercised = cash_flow_time > 0
+        # At t=0 every path starts from S0, so there is a single decision:
+        # exercise now if intrinsic value beats the *average* discounted
+        # continuation value. (Comparing per path would give the holder
+        # perfect foresight and bias the price upward.)
+        present_values = cash_flow_amount * np.exp(-r * dt * cash_flow_time)
+        continuation_value_0 = np.mean(present_values)
+        immediate_exercise_value = intrinsic(S0)
+        option_price = max(continuation_value_0, immediate_exercise_value)
         
-        if np.sum(not_exercised) > 0:
-            # Discount future cash flows to t=0
-            time_to_exercise = cash_flow_time[not_exercised]
-            discount_to_0 = np.exp(-r * dt * time_to_exercise)
-            continuation_value_0 = cash_flow_amount[not_exercised] * discount_to_0
-            
-            # Exercise now if better
-            should_exercise_0 = immediate_value[not_exercised] > continuation_value_0
-            exercise_indices_0 = np.where(not_exercised)[0][should_exercise_0]
-            cash_flow_time[exercise_indices_0] = 0
-            cash_flow_amount[exercise_indices_0] = immediate_value[exercise_indices_0]
-        
-        # Discount all cash flows to t=0
-        discount_to_0 = np.exp(-r * dt * cash_flow_time)
-        present_values = cash_flow_amount * discount_to_0
-        
-        # Option price is expected present value
-        option_price = np.mean(present_values)
-        
-        # Sanity check: American option must be at least as valuable as immediate exercise
-        immediate_exercise_value = np.mean(immediate_value)
-        option_price = max(option_price, immediate_exercise_value)
-        
-        computation_time = time.time() - start_time
+        computation_time = time.perf_counter() - start_time
         
         # Update performance metrics
         self.last_computation_time = computation_time
