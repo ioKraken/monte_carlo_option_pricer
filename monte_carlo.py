@@ -202,32 +202,14 @@ class MonteCarloEngine:
                 cash_flow_time[exercise_indices] = t
                 cash_flow_amount[exercise_indices] = intrinsic_values[exercise_indices, t]
         
-        # Consider immediate exercise at t=0
-        immediate_value = intrinsic_values[:, 0]
-        not_exercised = cash_flow_time > 0
-        
-        if np.sum(not_exercised) > 0:
-            # Discount future cash flows to t=0
-            time_to_exercise = cash_flow_time[not_exercised]
-            discount_to_0 = np.exp(-r * dt * time_to_exercise)
-            continuation_value_0 = cash_flow_amount[not_exercised] * discount_to_0
-            
-            # Exercise now if better
-            should_exercise_0 = immediate_value[not_exercised] > continuation_value_0
-            exercise_indices_0 = np.where(not_exercised)[0][should_exercise_0]
-            cash_flow_time[exercise_indices_0] = 0
-            cash_flow_amount[exercise_indices_0] = immediate_value[exercise_indices_0]
-        
-        # Discount all cash flows to t=0
-        discount_to_0 = np.exp(-r * dt * cash_flow_time)
-        present_values = cash_flow_amount * discount_to_0
-        
-        # Option price is expected present value
-        option_price = np.mean(present_values)
-        
-        # Sanity check: American option must be at least as valuable as immediate exercise
-        immediate_exercise_value = np.mean(immediate_value)
-        option_price = max(option_price, immediate_exercise_value)
+        # At t=0 every path starts from S0, so there is a single decision:
+        # exercise now if intrinsic value beats the *average* discounted
+        # continuation value. (Comparing per path would give the holder
+        # perfect foresight and bias the price upward.)
+        present_values = cash_flow_amount * np.exp(-r * dt * cash_flow_time)
+        continuation_value_0 = np.mean(present_values)
+        immediate_exercise_value = intrinsic_values[0, 0]
+        option_price = max(continuation_value_0, immediate_exercise_value)
         
         computation_time = time.perf_counter() - start_time
         
