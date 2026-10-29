@@ -11,32 +11,19 @@ from datetime import datetime
 from monte_carlo import MonteCarloEngine
 from greeks import GreeksCalculator
 from market_data import MarketDataFeed
+import theme
+from theme import C_PRIMARY, C_SECONDARY, C_AMBER, C_ROSE, C_SPOT, C_STRIKE, C_PATHS
 
 # Page configuration
 st.set_page_config(
     page_title="Monte Carlo Option Pricer",
-    page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for better styling
-st.markdown("""
-    <style>
-    .metric-card {
-        background-color: #f0f2f6;
-        padding: 20px;
-        border-radius: 10px;
-        margin: 10px 0;
-    }
-    .stMetric {
-        background-color: #ffffff;
-        padding: 15px;
-        border-radius: 8px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-    </style>
-""", unsafe_allow_html=True)
+# Dark theme: page CSS + Plotly template
+theme.register_plotly_template()
+st.markdown(theme.CSS, unsafe_allow_html=True)
 
 MAX_LSM_CELLS = 20_000_000  # sims x (steps+1) cap for American pricing (~160 MB per matrix)
 TICKER_PATTERN = re.compile(r"^[A-Z0-9.\-^=]{1,15}$")
@@ -60,13 +47,7 @@ if 'last_price_update' not in st.session_state:
     st.session_state.last_price_update = None
 
 # Title and description
-st.title("Monte Carlo Option Pricer")
-st.markdown("""
-**High-Performance Option Pricing with Real-Time Market Data**
-
-This application uses Monte Carlo simulation to estimate the fair value of financial options.
-Includes Black-Scholes comparison, Greeks and a performance benchmark.
-""")
+st.markdown(theme.HERO, unsafe_allow_html=True)
 
 # Sidebar - Input Parameters
 st.sidebar.header("Option Parameters")
@@ -94,7 +75,7 @@ if use_live_data:
         st.sidebar.error(st.session_state.market_error + " Enter values manually.")
     
     if st.session_state.get('market_data', {}).get('ticker') == ticker:
-        st.sidebar.success(f"✓ {st.session_state.market_data['company_name']}")
+        st.sidebar.success(f"Live data: {st.session_state.market_data['company_name']}")
         st.sidebar.metric("Current Price", f"${st.session_state.market_data['current_price']:.2f}")
         S0 = st.session_state.market_data['current_price']
         sigma = float(np.clip(st.session_state.market_data['volatility'], 0.01, 1.0))
@@ -134,7 +115,7 @@ params = (S0, K, T, r, sigma, option_type, option_style, num_simulations, num_st
 
 # Main content area with tabs
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📊 Pricing", "📈 Price Paths", "🧮 Greeks", "⚡ Performance", "🌊 Data Stream"
+    "Pricing", "Price Paths", "Greeks", "Performance", "Data Stream"
 ])
 
 # Tab 1: Option Pricing
@@ -267,15 +248,14 @@ with tab1:
                 x=strikes, y=prices,
                 mode='lines+markers',
                 name='Option Price',
-                line=dict(color='#1f77b4', width=2)
+                line=dict(color=C_PRIMARY, width=2)
             ))
             fig_strike.update_layout(
                 xaxis_title="Strike Price",
                 yaxis_title="Option Price",
-                height=300,
-                margin=dict(l=0, r=0, t=30, b=0)
+                height=300
             )
-            st.plotly_chart(fig_strike, width='stretch')
+            st.plotly_chart(fig_strike, width='stretch', theme=None)
         
           with col2:
             st.markdown("**Impact of Volatility**")
@@ -286,15 +266,14 @@ with tab1:
                 x=vols * 100, y=vol_prices,
                 mode='lines+markers',
                 name='Option Price',
-                line=dict(color='#ff7f0e', width=2)
+                line=dict(color=C_AMBER, width=2)
             ))
             fig_vol.update_layout(
                 xaxis_title="Volatility (%)",
                 yaxis_title="Option Price",
-                height=300,
-                margin=dict(l=0, r=0, t=30, b=0)
+                height=300
             )
-            st.plotly_chart(fig_vol, width='stretch')
+            st.plotly_chart(fig_vol, width='stretch', theme=None)
 
 # Tab 2: Price Paths Visualization
 with tab2:
@@ -327,7 +306,7 @@ with tab2:
                     x=time_steps,
                     y=st.session_state.price_paths[i],
                     mode='lines',
-                    line=dict(width=0.5, color='rgba(100, 100, 100, 0.3)'),
+                    line=dict(width=0.5, color=C_PATHS),
                     showlegend=False,
                     hoverinfo='skip'
                 ))
@@ -337,7 +316,7 @@ with tab2:
                 x=[0, T],
                 y=[K, K],
                 mode='lines',
-                line=dict(color='red', width=2, dash='dash'),
+                line=dict(color=C_STRIKE, width=2, dash='dash'),
                 name=f'Strike (K={K})'
             ))
             
@@ -346,7 +325,7 @@ with tab2:
                 x=[0, T],
                 y=[S0, S0],
                 mode='lines',
-                line=dict(color='green', width=2, dash='dash'),
+                line=dict(color=C_SPOT, width=2, dash='dash'),
                 name=f'Initial (S₀={S0})'
             ))
             
@@ -357,7 +336,7 @@ with tab2:
                 hovermode='closest'
             )
             
-            st.plotly_chart(fig_paths, width='stretch')
+            st.plotly_chart(fig_paths, width='stretch', theme=None)
         
         with col2:
             st.markdown("### Terminal Price Distribution")
@@ -367,14 +346,15 @@ with tab2:
                 x=st.session_state.terminal_prices,
                 nbinsx=50,
                 name='Terminal Prices',
-                marker_color='#1f77b4'
+                marker_color=C_PRIMARY
             ))
             
             fig_dist.add_vline(
                 x=K,
                 line_dash="dash",
-                line_color="red",
-                annotation_text="Strike"
+                line_color=C_STRIKE,
+                annotation_text="Strike",
+                annotation_position="top left"
             )
             
             fig_dist.update_layout(
@@ -384,7 +364,7 @@ with tab2:
                 showlegend=False
             )
             
-            st.plotly_chart(fig_dist, width='stretch')
+            st.plotly_chart(fig_dist, width='stretch', theme=None)
         
         # Statistics
         st.markdown("### Path Statistics")
@@ -476,16 +456,16 @@ with tab3:
             fig_delta.add_trace(go.Scatter(
                 x=stock_prices, y=deltas,
                 mode='lines',
-                line=dict(color='#1f77b4', width=2)
+                line=dict(color=C_PRIMARY, width=2)
             ))
-            fig_delta.add_vline(x=S0, line_dash="dash", line_color="green", annotation_text="Current")
-            fig_delta.add_vline(x=K, line_dash="dash", line_color="red", annotation_text="Strike")
+            fig_delta.add_vline(x=S0, line_dash="dash", line_color=C_SPOT, annotation_text="Current", annotation_position="top right")
+            fig_delta.add_vline(x=K, line_dash="dash", line_color=C_STRIKE, annotation_text="Strike", annotation_position="top left")
             fig_delta.update_layout(
                 xaxis_title="Stock Price",
                 yaxis_title="Delta",
                 height=300
             )
-            st.plotly_chart(fig_delta, width='stretch')
+            st.plotly_chart(fig_delta, width='stretch', theme=None)
             
             # Vega vs Volatility
             st.markdown("**Vega vs Volatility**")
@@ -496,15 +476,15 @@ with tab3:
             fig_vega.add_trace(go.Scatter(
                 x=vols * 100, y=vegas,
                 mode='lines',
-                line=dict(color='#ff7f0e', width=2)
+                line=dict(color=C_AMBER, width=2)
             ))
-            fig_vega.add_vline(x=sigma * 100, line_dash="dash", line_color="green", annotation_text="Current")
+            fig_vega.add_vline(x=sigma * 100, line_dash="dash", line_color=C_SPOT, annotation_text="Current", annotation_position="top right")
             fig_vega.update_layout(
                 xaxis_title="Volatility (%)",
                 yaxis_title="Vega",
                 height=300
             )
-            st.plotly_chart(fig_vega, width='stretch')
+            st.plotly_chart(fig_vega, width='stretch', theme=None)
         
         with col2:
             # Gamma vs Stock Price
@@ -515,16 +495,16 @@ with tab3:
             fig_gamma.add_trace(go.Scatter(
                 x=stock_prices, y=gammas,
                 mode='lines',
-                line=dict(color='#2ca02c', width=2)
+                line=dict(color=C_SECONDARY, width=2)
             ))
-            fig_gamma.add_vline(x=S0, line_dash="dash", line_color="green", annotation_text="Current")
-            fig_gamma.add_vline(x=K, line_dash="dash", line_color="red", annotation_text="Strike")
+            fig_gamma.add_vline(x=S0, line_dash="dash", line_color=C_SPOT, annotation_text="Current", annotation_position="top right")
+            fig_gamma.add_vline(x=K, line_dash="dash", line_color=C_STRIKE, annotation_text="Strike", annotation_position="top left")
             fig_gamma.update_layout(
                 xaxis_title="Stock Price",
                 yaxis_title="Gamma",
                 height=300
             )
-            st.plotly_chart(fig_gamma, width='stretch')
+            st.plotly_chart(fig_gamma, width='stretch', theme=None)
             
             # Theta vs Time
             st.markdown("**Theta vs Time to Expiration**")
@@ -535,15 +515,15 @@ with tab3:
             fig_theta.add_trace(go.Scatter(
                 x=times, y=thetas,
                 mode='lines',
-                line=dict(color='#d62728', width=2)
+                line=dict(color=C_ROSE, width=2)
             ))
-            fig_theta.add_vline(x=T, line_dash="dash", line_color="green", annotation_text="Current")
+            fig_theta.add_vline(x=T, line_dash="dash", line_color=C_SPOT, annotation_text="Current", annotation_position="top right")
             fig_theta.update_layout(
                 xaxis_title="Time to Expiration (Years)",
                 yaxis_title="Theta (per day)",
                 height=300
             )
-            st.plotly_chart(fig_theta, width='stretch')
+            st.plotly_chart(fig_theta, width='stretch', theme=None)
 
 # Tab 4: Performance Metrics
 with tab4:
@@ -608,9 +588,9 @@ with tab4:
             st.metric("Avg Throughput", f"{avg_throughput:,.0f} sims/sec")
             
             if max_throughput >= 10000:
-                st.success("✓ Meets high-frequency requirement (10,000+ sims/sec)")
+                st.success("Meets the 10,000+ sims/sec target")
             else:
-                st.warning("⚠ Below target throughput")
+                st.warning("Below the 10,000 sims/sec target on this machine")
         
         with col2:
             st.markdown("### Performance Charts")
@@ -627,7 +607,7 @@ with tab4:
                     y=st.session_state.benchmark_results['Time (ms)'],
                     mode='lines+markers',
                     name='Time',
-                    line=dict(color='#1f77b4', width=2)
+                    line=dict(color=C_PRIMARY, width=2)
                 ),
                 row=1, col=1
             )
@@ -639,7 +619,7 @@ with tab4:
                     y=st.session_state.benchmark_results['Sims/Second'],
                     mode='lines+markers',
                     name='Throughput',
-                    line=dict(color='#2ca02c', width=2)
+                    line=dict(color=C_SECONDARY, width=2)
                 ),
                 row=2, col=1
             )
@@ -651,7 +631,7 @@ with tab4:
             
             fig_perf.update_layout(height=600, showlegend=False)
             
-            st.plotly_chart(fig_perf, width='stretch')
+            st.plotly_chart(fig_perf, width='stretch', theme=None)
 
 # Tab 5: Data Stream Simulation
 with tab5:
@@ -711,7 +691,7 @@ with tab5:
                 y=st.session_state.stream_data['price'],
                 mode='lines',
                 name='Price',
-                line=dict(color='#1f77b4', width=1)
+                line=dict(color=C_PRIMARY, width=1)
             ))
             
             fig_stream.update_layout(
@@ -721,7 +701,7 @@ with tab5:
                 hovermode='x unified'
             )
             
-            st.plotly_chart(fig_stream, width='stretch')
+            st.plotly_chart(fig_stream, width='stretch', theme=None)
             
             # Volume chart
             st.markdown("### Volume Distribution")
@@ -731,7 +711,7 @@ with tab5:
                 x=st.session_state.stream_data['timestamp'],
                 y=st.session_state.stream_data['volume'],
                 name='Volume',
-                marker_color='#2ca02c'
+                marker_color=C_SECONDARY
             ))
             
             fig_volume.update_layout(
@@ -740,12 +720,7 @@ with tab5:
                 height=300
             )
             
-            st.plotly_chart(fig_volume, width='stretch')
+            st.plotly_chart(fig_volume, width='stretch', theme=None)
 
 # Footer
-st.markdown("---")
-st.markdown("""
-<div style='text-align: center; color: #666;'>
-    <p>Monte Carlo Option Pricer | Educational tool, not financial advice</p>
-</div>
-""", unsafe_allow_html=True)
+st.markdown(theme.FOOTER, unsafe_allow_html=True)
