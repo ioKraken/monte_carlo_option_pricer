@@ -21,7 +21,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-py-modules = ["monte_carlo", "greeks", "market_data"]
+py-modules = ["monte_carlo", "greeks", "market_data", "theme"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

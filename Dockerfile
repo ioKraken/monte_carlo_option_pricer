@@ -6,7 +6,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py monte_carlo.py greeks.py market_data.py ./
+COPY app.py theme.py monte_carlo.py greeks.py market_data.py ./
 COPY .streamlit .streamlit
 
 # Most hosts (Render, Fly, Cloud Run) inject $PORT; default to Streamlit's 8501
