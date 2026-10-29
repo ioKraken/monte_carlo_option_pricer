@@ -18,8 +18,9 @@ jobs:
       - name: Smoke-test the Streamlit app
         run: |
           python - <<'PY'
+          import os
           from streamlit.testing.v1 import AppTest
-          at = AppTest.from_file("app.py", default_timeout=90).run()
+          at = AppTest.from_file(os.path.abspath("app.py"), default_timeout=90).run()
           assert not at.exception, at.exception
           [b for b in at.button if b.label == "Calculate Option Price"][0].click().run()
           assert not at.exception, at.exception

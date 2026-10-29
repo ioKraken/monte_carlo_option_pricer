@@ -1,4 +1,4 @@
-"""Market data tests with Yahoo Finance mocked out (no network needed)."""
+"""Market data tests with Yahoo Finance mocked out."""
 import numpy as np
 import pandas as pd
 import pytest

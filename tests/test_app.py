@@ -1,13 +1,17 @@
 """End-to-end UI tests using Streamlit's AppTest (no browser, no network)."""
+from pathlib import Path
+
 import pytest
 from streamlit.testing.v1 import AppTest
 
 import market_data
 
+APP = str(Path(__file__).resolve().parent.parent / "app.py")
+
 
 @pytest.fixture
 def app():
-    return AppTest.from_file("app.py", default_timeout=90).run()
+    return AppTest.from_file(APP, default_timeout=90).run()
 
 
 def click(at, label):
@@ -55,7 +59,7 @@ def test_failed_live_fetch_shows_error_and_falls_back(monkeypatch):
     def boom(symbol):
         raise RuntimeError("rate limited")
     monkeypatch.setattr(market_data.yf, "Ticker", boom)
-    at = AppTest.from_file("app.py", default_timeout=90).run()
+    at = AppTest.from_file(APP, default_timeout=90).run()
     at.sidebar.checkbox[0].check().run()
     click(at, "Fetch Market Data")
     assert not at.exception
@@ -64,7 +68,7 @@ def test_failed_live_fetch_shows_error_and_falls_back(monkeypatch):
 
 
 def test_invalid_ticker_disables_fetch():
-    at = AppTest.from_file("app.py", default_timeout=90).run()
+    at = AppTest.from_file(APP, default_timeout=90).run()
     at.sidebar.checkbox[0].check().run()
     at.sidebar.text_input[0].set_value("DROP TABLE;").run()
     assert [b for b in at.sidebar.button if b.label == "Fetch Market Data"][0].disabled
